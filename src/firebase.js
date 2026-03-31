@@ -165,14 +165,16 @@ export async function getInProgressSession(userId) {
   const sessionsRef = collection(db, 'users', userId, 'sessions');
   const q = query(
     sessionsRef,
-    where('metadata.status', '==', 'in_progress'),
-    orderBy('metadata.created_at', 'desc'),
-    limit(1)
+    where('metadata.status', '==', 'in_progress')
   );
   const snap = await getDocs(q);
   if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...d.data() };
+  
+  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // Sort manually to get the most recent one (bypasses Firebase composite index limits)
+  docs.sort((a, b) => b.metadata.created_at.toMillis() - a.metadata.created_at.toMillis());
+  
+  return docs[0];
 }
 
 /** Get the last completed session (for H_prev) */
