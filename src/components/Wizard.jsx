@@ -5,6 +5,7 @@ import {
   completeSession,
   getLastCompletedSession,
   getUserPreferences,
+  getInProgressSession,
 } from '../firebase';
 import {
   calculateHydration,
@@ -164,16 +165,59 @@ export default function Wizard({ userId, onComplete }) {
   useEffect(() => {
     async function init() {
       try {
+        const inProgress = await getInProgressSession(userId);
+
+        let prevH = 1.0;
         const lastSession = await getLastCompletedSession(userId);
         if (lastSession?.xs_data?.starter_feed?.hydration) {
-          setPrevHydration(lastSession.xs_data.starter_feed.hydration);
+          prevH = lastSession.xs_data.starter_feed.hydration;
         } else {
           const prefs = await getUserPreferences(userId);
-          if (prefs?.initialHydration) setPrevHydration(prefs.initialHydration);
+          if (prefs?.initialHydration) prevH = prefs.initialHydration;
         }
-        const session = await createSession(userId);
-        setSessionId(session.id);
-        setTimestamps([new Date().toISOString()]);
+        setPrevHydration(prevH);
+
+        if (inProgress) {
+          // Restore session
+          setSessionId(inProgress.id);
+          const meta = inProgress.metadata || {};
+          if (meta.currentStep) setCurrentStep(meta.currentStep);
+          if (meta.timestamps) setTimestamps(meta.timestamps);
+
+          // Hydrate forms
+          const xs = inProgress.xs_data || {};
+          if (xs.starter_feed) setStarterFeed(p => ({ ...p, ...xs.starter_feed }));
+          if (xs.levain_preparation) setLevainPrep(p => ({ ...p, ...xs.levain_preparation }));
+          if (xs.autolyse) setAutolyse(p => ({ ...p, ...xs.autolyse }));
+          if (xs.mix) {
+            setMix(p => ({ ...p, ...xs.mix }));
+            if (xs.mix.photos) setMixPhotos(xs.mix.photos);
+          }
+          if (xs.bulk_fermentation) setBulkFerment(p => ({ ...p, ...xs.bulk_fermentation }));
+          if (xs.pre_shape) setPreShape(p => ({ ...p, ...xs.pre_shape }));
+          if (xs.cold_proof) setColdProof(p => ({ ...p, ...xs.cold_proof }));
+          if (xs.shape) setShape(p => ({ ...p, ...xs.shape }));
+          if (xs.warm_proof) setWarmProof(p => ({ ...p, ...xs.warm_proof }));
+
+          const ys = inProgress.ys_data || {};
+          if (ys.mass_kg !== undefined || ys.height !== undefined) {
+             setBakeMeasure(p => ({
+               ...p,
+               massKg: ys.mass_kg ?? p.massKg,
+               h: ys.height ?? p.h,
+               formFactor: meta.form_factor_multiplier ?? p.formFactor,
+               d1: ys.d1 ?? p.d1,
+               d2: ys.d2 ?? p.d2
+             }));
+          }
+          if (ys.photos) setBakePhotos(ys.photos);
+
+        } else {
+          // Start a new session
+          const session = await createSession(userId);
+          setSessionId(session.id);
+          setTimestamps([new Date().toISOString()]);
+        }
       } catch (err) {
         console.error('Wizard init error:', err);
       }
@@ -208,10 +252,7 @@ export default function Wizard({ userId, onComplete }) {
     [bakeMeasure.massKg, volume]
   );
 
-  /* — Timestamp helpers — */
-  const recordTimestamp = () => {
-    setTimestamps((prev) => [...prev, new Date().toISOString()]);
-  };
+
 
   /* — Step data getter — */
   const getStepData = (stepIndex) => {
@@ -235,15 +276,21 @@ export default function Wizard({ userId, onComplete }) {
     if (!sessionId) return;
     setSaving(true);
     try {
-      recordTimestamp();
+      const newTime = new Date().toISOString();
+      const newTimestamps = [...timestamps, newTime];
+      
       const stepKey = STEPS[currentStep].key;
       const data = {
         ...getStepData(currentStep),
-        timestamp: new Date().toISOString(),
+        timestamp: newTime,
       };
 
       if (currentStep < TOTAL_STEPS - 1) {
-        await updateSessionStep(userId, sessionId, `xs_data.${stepKey}`, data);
+        await updateSessionStep(userId, sessionId, `xs_data.${stepKey}`, data, {
+          currentStep: currentStep + 1,
+          timestamps: newTimestamps
+        });
+        setTimestamps(newTimestamps);
         setCurrentStep((s) => s + 1);
       } else {
         // Final step — complete the session

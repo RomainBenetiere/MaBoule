@@ -134,13 +134,17 @@ export async function createSession(userId) {
 }
 
 /** Update a specific step in xs_data or ys_data */
-export async function updateSessionStep(userId, sessionId, path, data) {
+export async function updateSessionStep(userId, sessionId, path, data, extraMetadata = {}) {
   if (!db) return;
   const ref = doc(db, 'users', userId, 'sessions', sessionId);
-  await updateDoc(ref, {
+  const updates = {
     [path]: data,
     'metadata.updated_at': Timestamp.now(),
-  });
+  };
+  for (const [k, v] of Object.entries(extraMetadata)) {
+    updates[`metadata.${k}`] = v;
+  }
+  await updateDoc(ref, updates);
 }
 
 /** Mark a session as completed */
@@ -153,6 +157,22 @@ export async function completeSession(userId, sessionId, finalData) {
     'metadata.completed_at': Timestamp.now(),
     'metadata.updated_at': Timestamp.now(),
   });
+}
+
+/** Get an in-progress session (for resuming) */
+export async function getInProgressSession(userId) {
+  if (!db) return null;
+  const sessionsRef = collection(db, 'users', userId, 'sessions');
+  const q = query(
+    sessionsRef,
+    where('metadata.status', '==', 'in_progress'),
+    orderBy('metadata.created_at', 'desc'),
+    limit(1)
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...d.data() };
 }
 
 /** Get the last completed session (for H_prev) */
